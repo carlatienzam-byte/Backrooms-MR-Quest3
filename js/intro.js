@@ -191,10 +191,10 @@
   ];
 
   /* Duración de cada locución (ms): valores de reserva; se corrigen al cargar los mp3. */
-  const VOZ = [6635, 8620, 8463, 9012, 6870, 10814, 6974, 6844, 5642];
+  const VOZ = [7366, 8881, 9430, 10213, 8515, 11650, 8097, 7209, 6034];
   // Un único reproductor: una vez desbloqueado con un toque, sirve para
   // todas las escenas (iPhone/iPad exigen esto; en el Quest también va bien).
-  const VERSION_AUDIO = 5;
+  const VERSION_AUDIO = 6;
   const urlVoz = (i) => 'audio/tutorial/escena' + i + '.mp3?v=' + VERSION_AUDIO;
   const voz = new Audio(); voz.preload = 'auto';
   window.__vozTutorial = voz;
@@ -234,6 +234,17 @@
   }
   voz.addEventListener('play', () => { if (conMusica && !musica.paused) fundirMusica(VOL_BAJO_VOZ, 350); });
   ['pause', 'ended'].forEach((ev) => voz.addEventListener(ev, () => { if (conMusica && !musica.paused && !pausado) fundirMusica(VOL_MUSICA, 900); }));
+
+  /* Con voz, la escena NO avanza por reloj sino cuando la frase termina
+     (+ un respiro). Así, aunque el audio tarde en cargar (red lenta, Quest),
+     nunca se corta. El reloj queda solo como red de seguridad. */
+  let inicioEscena = 0;
+  voz.addEventListener('ended', () => {
+    if (pausado || !conVoz || !raiz || raiz.classList.contains('fuera')) return;
+    const e = ESCENAS[idx]; if (!e || !e.anim) return;
+    const pasado = performance.now() - inicioEscena;
+    programar(Math.max(900, e.anim - pasado));
+  });
 
   function callar() { voz.pause(); }
   function hablar(i) {
@@ -424,7 +435,7 @@
     if (pausado) { clearTimeout(temporizador); restante -= performance.now() - inicio; callar(); if (!musica.paused) fundirMusica(0, 300); }
     else {
       sonarMusica();
-      if (duracion(idx)) programar(Math.max(300, restante));
+      if (duracion(idx)) programar(conVoz && voz.ended ? 900 : Math.max(300, restante));
       if (conVoz && !voz.ended && voz.src) voz.play().catch(() => {});
     }
   }
@@ -469,9 +480,10 @@
         if (t && t.iterations === 1) a.playbackRate = e.anim / d;
       }));
     }
+    inicioEscena = performance.now();
     hablar(i);
     sonarMusica();
-    programar(d);
+    programar(conVoz && d ? d + 6000 : d);   // con voz: espera al final de la frase
   }
 
   function cerrar() {

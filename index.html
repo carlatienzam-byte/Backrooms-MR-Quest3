@@ -42,6 +42,18 @@ const spawnPoints = {
   "#world_5": { x: 33.98853, y: 0, z: 0, rotY: 180 }
 };
 
+/* =========================
+   🔙 APARICIÓN AL VOLVER AL HUB (World 1)
+   Depende del mundo del que vienes. Medido sobre el plano de
+   backrooms_vr.glb (escala 1.25). rotY: 0 = mirando a -Z, 180 = a +Z.
+========================= */
+const spawnRegreso = {
+  "#world_2": { x: -54.1, y: 0, z: 0.8,  rotY: 0 },    // gasolinera → junto a las dependencias del rosco rojo (Stranger Things)
+  "#world_3": { x: -54.9, y: 0, z: 10.8, rotY: 180 },  // japonés → hueco de la sala de la entrada a Carretera Perdida
+  "#world_4": { x: -23.5, y: 0, z: -2.5, rotY: 180 },  // Stranger Things → transepto del pasillo inicial, lado opuesto al Capitán Clark
+  "#world_5": { x: -80.5, y: 0, z: 8.5,  rotY: -151 }  // Carretera Perdida → sala del rosco que lleva a la gasolinera
+};
+
 function stopAllWorldMusic() {
   ['music_world1', 'music_world2', 'music_world3', 'music_world4', 'music_world5'].forEach(id => {
     const soundEntity = document.querySelector('#' + id);
@@ -98,6 +110,7 @@ function enMundoVisible(el) {
    🌌 CAMBIO DE MUNDO
 ========================= */
 function goWorld(id) {
+  const origen = MR.mundoActual;   // mundo del que salimos
   stopAllWorldMusic();
 
   // En realidad mixta, salir del aula hacia un mundo
@@ -124,10 +137,8 @@ function goWorld(id) {
 
   // Aparición: la CABEZA queda en el punto de aparición (en gafas el
   // visitante puede estar lejos del centro de su zona de juego)
-  if (spawnPoints[id]) {
-    const p = spawnPoints[id];
-    MR.teleportRig(p.x, p.y, p.z, p.rotY);
-  }
+  const p = (id === '#world_1' && spawnRegreso[origen]) || spawnPoints[id];
+  if (p) MR.teleportRig(p.x, p.y, p.z, p.rotY);
   MR.mundoActual = id;
   document.querySelector('a-scene').emit('mundo-cambiado', { mundo: id });
 

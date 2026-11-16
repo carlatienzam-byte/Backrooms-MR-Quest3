@@ -203,6 +203,30 @@
   ESCENAS.forEach((e) => { e.anim = e.dur; });
   // Con voz, la escena dura lo que la locución (+ un respiro) y la animación se ralentiza a la par
   const duracion = (i) => { const e = ESCENAS[i]; if (!e.anim) return 0; return conVoz ? Math.max(e.anim, VOZ[i] + 900) : e.anim; };
+  /* Música de fondo original (audio/tutorial/musica_fondo.mp3, bucle de 64 s
+     compuesto para el proyecto). Baja sola mientras habla la voz. */
+  const musica = new Audio('audio/tutorial/musica_fondo.mp3?v=' + VERSION_AUDIO);
+  musica.loop = true; musica.preload = 'auto'; musica.volume = 0;
+  window.__musicaTutorial = musica;
+  let conMusica = true, volObjetivo = 0, fundidoMus = null;
+  const VOL_MUSICA = 0.38, VOL_BAJO_VOZ = 0.14;
+  function fundirMusica(v, ms) {
+    volObjetivo = v; clearInterval(fundidoMus);
+    const ini = musica.volume, t0 = performance.now(); ms = ms || 600;
+    fundidoMus = setInterval(() => {
+      const k = Math.min(1, (performance.now() - t0) / ms);
+      musica.volume = Math.max(0, Math.min(1, ini + (volObjetivo - ini) * k));
+      if (k >= 1) { clearInterval(fundidoMus); if (volObjetivo === 0) musica.pause(); }
+    }, 40);
+  }
+  function sonarMusica() {
+    if (!conMusica) return;
+    if (musica.paused) musica.play().catch(() => {});
+    fundirMusica(conVoz && !voz.paused ? VOL_BAJO_VOZ : VOL_MUSICA, 900);
+  }
+  voz.addEventListener('play', () => { if (conMusica && !musica.paused) fundirMusica(VOL_BAJO_VOZ, 350); });
+  ['pause', 'ended'].forEach((ev) => voz.addEventListener(ev, () => { if (conMusica && !musica.paused && !pausado) fundirMusica(VOL_MUSICA, 900); }));
+
   function callar() { voz.pause(); }
   function hablar(i) {
     voz.pause();
@@ -355,6 +379,7 @@
         <span class="puntos">${ESCENAS.map((_, i) => `<i data-i="${i}"><b></b></i>`).join('')}</span>
         <button data-a="sig" aria-label="Siguiente">▶</button>
         <button data-a="voz" aria-label="Voz">🔊</button>
+        <button data-a="musica" aria-label="Música">🎵</button>
         <button data-a="saltar">Saltar ▸▸</button>
       </div>`;
     document.body.appendChild(raiz);
@@ -364,7 +389,7 @@
       const b = e.target.closest('[data-a],[data-i]'); if (!b) return;
       if (b.dataset.i !== undefined) return mostrar(+b.dataset.i);
       ({ ant: () => mostrar(Math.max(0, idx - 1)), sig: () => mostrar(idx + 1), pausa: alternarPausa, saltar: cerrar, empezar: cerrar,
-         repetir: () => mostrar(0), voz: alternarVoz, comenzar: () => { raiz.classList.remove('portada'); mostrar(0); } })[b.dataset.a]();
+         repetir: () => mostrar(0), voz: alternarVoz, musica: alternarMusica, comenzar: () => { raiz.classList.remove('portada'); mostrar(0); } })[b.dataset.a]();
     });
     document.addEventListener('keydown', teclas);
   }
@@ -388,11 +413,19 @@
     pausado = !pausado;
     raiz.classList.toggle('pausa', pausado);
     btnPausa.textContent = pausado ? '▶︎' : '❚❚';
-    if (pausado) { clearTimeout(temporizador); restante -= performance.now() - inicio; callar(); }
+    if (pausado) { clearTimeout(temporizador); restante -= performance.now() - inicio; callar(); if (!musica.paused) fundirMusica(0, 300); }
     else {
+      sonarMusica();
       if (duracion(idx)) programar(Math.max(300, restante));
       if (conVoz && !voz.ended && voz.src) voz.play().catch(() => {});
     }
+  }
+
+  function alternarMusica() {
+    conMusica = !conMusica;
+    const b = raiz.querySelector('[data-a="musica"]');
+    b.textContent = '🎵'; b.style.opacity = conMusica ? '1' : '.4'; b.style.textDecoration = conMusica ? '' : 'line-through';
+    if (conMusica) sonarMusica(); else fundirMusica(0, 400);
   }
 
   function alternarVoz() {
@@ -429,12 +462,14 @@
       }));
     }
     hablar(i);
+    sonarMusica();
     programar(d);
   }
 
   function cerrar() {
     clearTimeout(temporizador);
     callar();
+    fundirMusica(0, 700);
     marcar();
     raiz.classList.add('fuera');
     setTimeout(() => { raiz.style.display = 'none'; escenario.innerHTML = ''; }, 650);

@@ -1,0 +1,1245 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Backrooms MR · Quest 3</title>
+  <script src="https://aframe.io/releases/1.7.1/aframe.min.js"></script>
+  <!-- Colisiones con los modelos GLB (archivos locales del repo) -->
+  <script src="three-mesh-bvh.min.js"></script>
+  <script src="colisiones.js"></script>
+  <script src="https://unpkg.com/aframe-event-set-component@5.x.x/dist/aframe-event-set-component.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-extras@7.5.4/dist/aframe-extras.min.js"></script>
+  <!-- ✋ Realidad mixta + manos (Quest 3) y 👥 multiusuario sin servidor -->
+  <script src="lib/trystero.min.js"></script>
+  <script src="js/mr-core.js"></script>
+  <script src="js/multijugador.js"></script>
+  <style>
+    #hud { position: fixed; left: 12px; top: 12px; z-index: 50; font-family: sans-serif;
+           color: #f0e68c; background: rgba(0,0,0,0.55); padding: 8px 12px; border-radius: 6px;
+           font-size: 13px; display: flex; flex-direction: column; gap: 6px; max-width: 70vw; }
+    #hud button { background: transparent; color: #f0e68c; border: 1px solid #f0e68c; border-radius: 4px;
+                  padding: 6px 10px; font-size: 13px; cursor: pointer; text-align: left; }
+    #hud .oculto { display: none; }
+    body.en-xr #hud { display: none; }
+    body.simular-aula { background: #20201c; }
+  </style>
+</head>
+
+<body>
+
+<script>
+
+/* =========================
+   🌌 POSICIONES DE APARICIÓN
+========================= */
+
+const spawnPoints = {
+  "#world_1": { x: 0, y: 0, z: 0, rotY: 0 },
+  "#world_2": { x: 0, y: 0, z: 0, rotY: 180 },
+  "#world_3": { x: 0, y: 2, z: 5, rotY: 180 },
+  "#world_4": { x: 0, y: 0, z: 0, rotY: 180 },
+  "#world_5": { x: 33.98853, y: 0, z: 0, rotY: 180 }
+};
+
+function stopAllWorldMusic() {
+  ['music_world1', 'music_world2', 'music_world3', 'music_world4', 'music_world5'].forEach(id => {
+    const soundEntity = document.querySelector('#' + id);
+    if (soundEntity && soundEntity.components.sound) {
+      soundEntity.components.sound.stopSound();
+    }
+  });
+}
+
+/* =========================
+   🧱 AISLAMIENTO DE MUNDOS
+   Cada mundo es independiente: solo se puede interactuar con el mundo
+   en el que estás, y al salir de un mundo se apaga todo lo que sonaba.
+   · Mundos ocultos: sus objetos pierden la clase "clickable" (los rayos
+     del mando y del ratón ya no los ven), se paran todos sus sonidos y
+     los interruptores (sound-toggle) vuelven a "apagado".
+   · Mundo visible: recupera sus "clickable".
+========================= */
+function aislarMundos(idVisible) {
+  document.querySelectorAll('[data-world]').forEach(world => {
+    const activo = ('#' + world.id) === idVisible;
+    const elementos = [world, ...world.querySelectorAll('*')];
+    elementos.forEach(el => {
+      // Interacciones
+      if (activo) {
+        if (el.dataset && el.dataset.clicOff) { el.classList.add('clickable'); delete el.dataset.clicOff; }
+      } else if (el.classList && el.classList.contains('clickable')) {
+        el.classList.remove('clickable'); el.dataset.clicOff = '1';
+      }
+      if (activo || !el.components) return;
+      // Sonidos (sound, sound__buzz, …) y audios HTML
+      Object.keys(el.components).forEach(nombre => {
+        const c = el.components[nombre];
+        if (nombre === 'sound' || nombre.indexOf('sound__') === 0) { try { c.stopSound(); } catch (e) {} }
+      });
+      if (el.components['sound-toggle']) el.components['sound-toggle'].playing = false;
+      if (el.tagName === 'AUDIO' || el.tagName === 'VIDEO') { try { el.pause(); } catch (e) {} }
+    });
+  });
+  // Que los rayos (mandos y ratón) vuelvan a leer la lista de objetos
+  document.querySelectorAll('[raycaster]').forEach(r => {
+    const rc = r.components && r.components.raycaster;
+    if (rc && rc.refreshObjects) rc.refreshObjects();
+  });
+}
+
+/* ¿Está este elemento en el mundo visible? (sube por la jerarquía) */
+function enMundoVisible(el) {
+  for (let o = el.object3D; o; o = o.parent) if (o.visible === false) return false;
+  return true;
+}
+
+/* =========================
+   🌌 CAMBIO DE MUNDO
+========================= */
+function goWorld(id) {
+  stopAllWorldMusic();
+
+  // En realidad mixta, salir del aula hacia un mundo
+  if (window.MR && MR.estado === 'aula') {
+    MR.quitarVentana();
+    MR.estado = 'mundo';
+    MR.mostrarAula(false);
+  }
+
+  document.querySelectorAll('[data-world]').forEach(world => {
+    world.setAttribute('visible', false);
+  });
+
+  const target = document.querySelector(id);
+  if (target) {
+    target.setAttribute('visible', true);
+  }
+
+  aislarMundos(id);
+
+  // Puerta de vuelta al aula: solo en realidad mixta
+  const puerta = document.querySelector('#puerta_aula');
+  if (puerta) puerta.setAttribute('visible', !!(window.MR && MR.estado === 'mundo'));
+
+  // Aparición: la CABEZA queda en el punto de aparición (en gafas el
+  // visitante puede estar lejos del centro de su zona de juego)
+  if (spawnPoints[id]) {
+    const p = spawnPoints[id];
+    MR.teleportRig(p.x, p.y, p.z, p.rotY);
+  }
+  MR.mundoActual = id;
+  document.querySelector('a-scene').emit('mundo-cambiado', { mundo: id });
+
+  let musicId = null;
+  if (id === '#world_1') musicId = '#music_world1';
+  if (id === '#world_2') musicId = '#music_world2';
+  if (id === '#world_3') musicId = '#music_world3';
+  if (id === '#world_4') musicId = '#music_world4';
+  // World 5 NO arranca música por defecto: solo suena si se activa la
+  // máquina expendedora con el gatillo (sound-toggle).
+
+  if (musicId) {
+    const music = document.querySelector(musicId);
+    if (music && music.components.sound) {
+      music.components.sound.playSound();
+    }
+  }
+}
+
+/* =========================
+   🔊 SOUND-TOGGLE
+   Activa/desactiva un sonido en bucle con el GATILLO (clic)
+========================= */
+AFRAME.registerComponent('sound-toggle', {
+  init: function () {
+    this.playing = false;
+    this.el.addEventListener('click', () => this.setEstado(!this.playing, false));
+  },
+  // remoto = true → el cambio viene de otro usuario (no se reenvía)
+  setEstado: function (encender, remoto) {
+    const soundComp = this.el.components.sound;
+    if (!soundComp) return;
+    if (encender === this.playing) return;
+    if (encender) soundComp.playSound(); else soundComp.stopSound();
+    this.playing = encender;
+    if (!remoto && window.RED) RED.emitir({ t: 'toggle', k: 'sound', id: this.el.dataset.net, v: encender });
+  }
+});
+
+/* =========================
+   🔊 RAYCASTER-SOUND
+   Reproduce el sonido del modelo al hacer clic con el raycaster
+========================= */
+AFRAME.registerComponent('raycaster-sound', {
+  init: function () {
+    this.el.addEventListener('click', () => {
+      const soundComp = this.el.components.sound;
+      if (soundComp) {
+        soundComp.stopSound();
+        soundComp.playSound();
+      }
+    });
+  }
+});
+
+/* =========================
+   👆 CLICK-TOGGLE
+   Muestra/oculta un elemento al hacer CLIC (no con hover)
+========================= */
+AFRAME.registerComponent('click-toggle', {
+  schema: {
+    target: { type: 'selector' }
+  },
+  init: function () {
+    this.el.addEventListener('click', () => {
+      const target = this.data.target;
+      if (!target) return;
+      this.setEstado(!target.getAttribute('visible'), false);
+    });
+  },
+  setEstado: function (visible, remoto) {
+    const target = this.data.target;
+    if (!target) return;
+    target.setAttribute('visible', visible);
+    if (!remoto && window.RED) RED.emitir({ t: 'toggle', k: 'click', id: this.el.dataset.net, v: visible });
+  }
+});
+
+/* =========================
+   🔮 PORTAL AAA
+========================= */
+AFRAME.registerComponent('portal-aaa', {
+  schema: {
+    target: {type: 'string'},
+    radius: {type: 'number', default: 2.2},
+    cooldown: {type: 'number', default: 1500}
+  },
+
+  init: function () {
+    this.lastTeleport = 0;
+    // También se entra con un pellizco (o gatillo / clic) sobre el portal
+    this.el.addEventListener('click', () => this.intentar());
+  },
+
+  tick: function () {
+    if (window.MR && MR.estado === 'aula') return;   // en el aula el World 1 es solo "ventana"
+    if (!enMundoVisible(this.el)) return;   // portal de un mundo oculto: no hace nada
+
+    // Se mide desde la CABEZA: en realidad mixta el visitante camina de verdad
+    const playerPos = MR.cabeza();
+    const portalPos = new THREE.Vector3();
+    this.el.object3D.getWorldPosition(portalPos);
+    playerPos.y = portalPos.y;   // solo cuenta la distancia en el suelo
+
+    if (playerPos.distanceTo(portalPos) < this.data.radius * 0.75) this.intentar();
+  },
+
+  intentar: function () {
+    if (!enMundoVisible(this.el)) return;
+    if (Date.now() - this.lastTeleport < this.data.cooldown) return;
+    this.lastTeleport = Date.now();
+    const target = this.data.target;
+    MR.fundido(() => goWorld(target));
+  }
+});
+
+/* =========================
+   🌀 PORTAL ENERGY
+========================= */
+AFRAME.registerComponent('portal-energy', {
+  tick: function () {
+    const time = Date.now() * 0.002;
+    const scale = 1 + Math.sin(time) * 0.08;
+    const rotation = Date.now() * 0.03;
+    this.el.setAttribute('scale', `${scale} ${scale} ${scale}`);
+    this.el.setAttribute('rotation', `0 ${rotation} 0`);
+  }
+});
+
+/* =========================
+   🏷️ CANVAS-LABEL
+   El componente "text" de A-Frame carga su fuente desde cdn.aframe.io por
+   red — y esa petición se estaba perdiendo (probablemente interceptada por
+   la herramienta de vista previa local), dejando el fondo visible pero sin
+   ninguna letra. Este componente dibuja el texto directamente en un
+   <canvas> del propio navegador (fuente del sistema, sin red) y lo usa
+   como textura de un plano — cero dependencias externas.
+========================= */
+AFRAME.registerComponent('canvas-label', {
+  schema: {
+    text: { type: 'string', default: '' },
+    width: { type: 'number', default: 3 },
+    height: { type: 'number', default: 0.6 },
+    bgColor: { type: 'color', default: '#333333' },
+    textColor: { type: 'color', default: '#ffffff' },
+    fontSize: { type: 'number', default: 90 }
+  },
+  init: function () {
+    const canvas = document.createElement('canvas');
+    canvas.width = 1024;
+    canvas.height = Math.round(1024 * (this.data.height / this.data.width));
+    const ctx = canvas.getContext('2d');
+
+    ctx.fillStyle = this.data.bgColor;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.fillStyle = this.data.textColor;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    const maxWidth = canvas.width * 0.9;
+    const maxHeight = canvas.height * 0.85;
+
+    // Reduce el tamaño de letra hasta que el bloque de texto (ya envuelto
+    // en varias líneas si hace falta) quepa dentro del lienzo. Antes el
+    // tamaño era fijo y demasiado grande: las líneas de más se calculaban
+    // fuera del área visible del canvas, así que no se veían aunque el
+    // fondo sí se pintara entero.
+    let fontSize = this.data.fontSize;
+    let lines = [];
+    for (let attempt = 0; attempt < 25; attempt++) {
+      ctx.font = `bold ${fontSize}px sans-serif`;
+      const words = this.data.text.split(' ');
+      lines = [];
+      let line = '';
+      words.forEach((word) => {
+        const test = line ? line + ' ' + word : word;
+        if (ctx.measureText(test).width > maxWidth && line) {
+          lines.push(line);
+          line = word;
+        } else {
+          line = test;
+        }
+      });
+      if (line) lines.push(line);
+
+      const blockHeight = lines.length * (fontSize * 1.25);
+      if (blockHeight <= maxHeight || fontSize <= 16) break;
+      fontSize -= 4;
+    }
+
+    const lineHeight = fontSize * 1.25;
+    const startY = canvas.height / 2 - ((lines.length - 1) * lineHeight) / 2;
+    lines.forEach((l, i) => {
+      ctx.fillText(l, canvas.width / 2, startY + i * lineHeight);
+    });
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+
+    const geometry = new THREE.PlaneGeometry(this.data.width, this.data.height);
+    const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true });
+    const mesh = new THREE.Mesh(geometry, material);
+    this.el.setObject3D('canvas-label-mesh', mesh);
+
+    console.log(`[canvas-label] "${this.data.text}" -> tamaño de letra final: ${fontSize}px, líneas: ${lines.length}`);
+  }
+});
+
+/* =========================
+   🚨 BOOST-EMISSIVE
+   La carcasa del rotativo usa el material "gyro" (estático, no debe brillar
+   entero). Las piezas que REALMENTE giran y parpadean —las que mueve la
+   animación "Siren_flash" (nodos flash, flash_1..flash_7, Plan_2)— usan dos
+   materiales distintos: "Mat." y "Mat._0". Son esas, y solo esas, las que
+   coloreamos y hacemos parpadear con intensidad alta.
+   Los demás materiales que ya tenían algo de emissive propio (como
+   "phare_ar") se refuerzan un poco, sin parpadeo ni cambio de color.
+========================= */
+AFRAME.registerComponent('boost-emissive', {
+  schema: {
+    intensity: { type: 'number', default: 90 },
+    gyroColor: { type: 'color', default: '#ff0000' },
+    flashSpeed: { type: 'number', default: 6 }, // destellos por segundo aprox.
+    spotIntensity: { type: 'number', default: 40 },
+    rotSpeed: { type: 'number', default: 1.2 } // vueltas por segundo de la luz
+  },
+  init: function () {
+    this.gyroMaterials = [];
+    this.el.addEventListener('model-loaded', () => {
+      const mesh = this.el.getObject3D('mesh');
+      if (!mesh) {
+        console.warn('[boost-emissive] model-loaded disparado pero no hay objeto mesh en', this.el);
+        return;
+      }
+      let totalMeshes = 0;
+      let totalMaterials = 0;
+      let boosted = 0;
+      let gyroNode = null;
+      mesh.traverse((node) => {
+        if (node.isMesh && node.material) {
+          totalMeshes++;
+          const materials = Array.isArray(node.material) ? node.material : [node.material];
+          materials.forEach((mat) => {
+            totalMaterials++;
+            const name = (mat.name || '').toLowerCase();
+            // Solo la pieza giratoria del rotativo: materiales "Mat." / "Mat._0"
+            const isFlashPart = name === 'mat.' || name.startsWith('mat._');
+            const hasEmissive = mat.emissive && (mat.emissive.r > 0 || mat.emissive.g > 0 || mat.emissive.b > 0);
+            if (isFlashPart) {
+              boosted++;
+              mat.emissive = new THREE.Color(this.data.gyroColor);
+              mat.emissiveIntensity = this.data.intensity;
+              mat.toneMapped = false;
+              mat.needsUpdate = true;
+              this.gyroMaterials.push(mat);
+            } else if (hasEmissive) {
+              boosted++;
+              mat.emissiveIntensity = this.data.intensity * 0.3;
+              mat.toneMapped = false;
+              mat.needsUpdate = true;
+            }
+          });
+        }
+        // Localizamos el nodo del rotativo (no el interior) para colgar ahí
+        // una luz real que gire con él.
+        if (!gyroNode && node.name && node.name.toLowerCase().includes('gyro') &&
+            !node.name.toLowerCase().includes('interieur')) {
+          gyroNode = node;
+        }
+      });
+      console.log(`[boost-emissive] ${this.el.id || '(sin id)'}: ${totalMeshes} meshes, ${totalMaterials} materiales, ${boosted} reforzados, ${this.gyroMaterials.length} piezas del flash parpadeando, nodo gyro: ${gyroNode ? gyroNode.name : 'NO ENCONTRADO'}`);
+
+      // 🔦 Luz giratoria real (spot azul) colgada de la posición del rotativo
+      if (gyroNode) {
+        const worldPos = new THREE.Vector3();
+        gyroNode.getWorldPosition(worldPos);
+        const localPos = this.el.object3D.worldToLocal(worldPos.clone());
+
+        this.lightRig = new THREE.Group();
+        this.lightRig.position.copy(localPos);
+        this.el.object3D.add(this.lightRig);
+
+        const spotTarget = new THREE.Object3D();
+        spotTarget.position.set(3, -1, 0);
+        this.lightRig.add(spotTarget);
+
+        this.spotLight = new THREE.SpotLight(
+          new THREE.Color(this.data.gyroColor),
+          this.data.spotIntensity, 14, Math.PI / 6, 0.5, 1.5
+        );
+        this.spotLight.target = spotTarget;
+        this.lightRig.add(this.spotLight);
+      } else {
+        console.warn('[boost-emissive] No se encontró el nodo "gyro" para colgar la luz giratoria en', this.el.id);
+      }
+    });
+  },
+  tick: function (time, delta) {
+    if (this.gyroMaterials.length) {
+      // Onda cuadrada: alterna entre apagado y brillo máximo -> efecto destello,
+      // no una transición suave (así se parece más a un flash real).
+      const period = 1000 / this.data.flashSpeed;
+      const phase = (time % period) / period; // 0..1
+      const on = phase < 0.5;
+      const value = on ? this.data.intensity : this.data.intensity * 0.05;
+      this.gyroMaterials.forEach((mat) => {
+        mat.emissiveIntensity = value;
+      });
+    }
+    if (this.lightRig) {
+      this.lightRig.rotation.y += (delta / 1000) * this.data.rotSpeed * Math.PI * 2;
+    }
+  }
+});
+
+/* =========================
+   🚀 INICIO — pantalla de bienvenida para desbloquear audio
+========================= */
+document.addEventListener('DOMContentLoaded', () => {
+  const scene = document.querySelector('a-scene');
+  const overlay = document.getElementById('start-overlay');
+  const btn = document.getElementById('start-btn');
+
+  // Cargar mundo pero sin música todavía
+  scene.addEventListener('loaded', () => {
+    setTimeout(() => {
+      // Mostrar mundos pero sin sonido aún
+      document.querySelectorAll('[data-world]').forEach(w => w.setAttribute('visible', false));
+      document.querySelector('#world_1').setAttribute('visible', true);
+      const rig = document.querySelector('#playerRig');
+      if (rig) rig.object3D.position.set(0, 0, 0);
+    }, 300);
+  });
+
+  // Al pulsar el botón: ocultar overlay y arrancar música
+  btn.addEventListener('click', () => {
+    overlay.style.display = 'none';
+    // Reanudar AudioContext si el navegador lo suspendió
+    const ctx = THREE.AudioContext.getContext();
+    if (ctx && ctx.state === 'suspended') {
+      ctx.resume().then(() => playWorldMusic('#music_world1'));
+    } else {
+      playWorldMusic('#music_world1');
+    }
+    // Simulación del aula en escritorio:  index.html?modo=aula
+    if (MR.forzarAula) {
+      document.body.classList.add('simular-aula');
+      setTimeout(() => MR.entrarAula(), 100);
+    }
+  });
+});
+
+function playWorldMusic(id) {
+  const music = document.querySelector(id);
+  if (music && music.components.sound) {
+    music.components.sound.playSound();
+  }
+}
+
+/* =========================
+   🔍 DEBUG — comprobar si raycaster-intersected llega a dispararse
+   en la máquina y las señales al apuntar (sin hacer clic).
+========================= */
+document.addEventListener('DOMContentLoaded', () => {
+  ['#maquinaExpendedora', '#senal1', '#senal2', '#senal3'].forEach((sel) => {
+    const el = document.querySelector(sel);
+    if (!el) {
+      console.warn('[debug-raycaster] no existe', sel);
+      return;
+    }
+    el.addEventListener('raycaster-intersected', (e) => {
+      console.log('[debug-raycaster] ENTER en', sel, 'desde', e.detail && e.detail.el && e.detail.el.id);
+    });
+    el.addEventListener('raycaster-intersected-cleared', (e) => {
+      console.log('[debug-raycaster] LEAVE en', sel);
+    });
+  });
+});
+
+</script>
+
+<!-- 🎬 PANTALLA DE INICIO -->
+<div id="start-overlay" style="
+  position: fixed; inset: 0; z-index: 9999;
+  background: #000;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 24px;
+  font-family: sans-serif; color: #fff;">
+  <div style="font-size: 2rem; letter-spacing: 0.2em; text-transform: uppercase; opacity: 0.9;">🌌 Backrooms MR</div>
+  <div style="font-size: 0.95rem; opacity: 0.6; max-width: 34em; text-align: center; line-height: 1.5; padding: 0 16px;">
+    Meta Quest 3 · deja los mandos y usa las manos.<br>
+    Pulsa <b>ENTRAR</b> y después <b>AR</b> (realidad mixta: la puerta aparece en tu aula)
+    o <b>VR</b> (inmersivo, como el proyecto original).<br>
+    ✋ Pellizco pulgar-índice = clic · mano izquierda: pellizco mantenido hacia el suelo = teletransporte ·
+    palma izquierda hacia ti = menú.
+  </div>
+  <button id="start-btn" style="
+    margin-top: 12px;
+    padding: 14px 40px;
+    font-size: 1.1rem;
+    letter-spacing: 0.1em;
+    background: transparent;
+    border: 2px solid #fff;
+    color: #fff;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.2s;">
+    ▶ ENTRAR
+  </button>
+</div>
+
+<!-- 📟 Panel 2D (solo fuera de las gafas) -->
+<div id="hud">
+  <div id="hud-red">⚪ conectando…</div>
+  <button id="hud-entrar" class="oculto" onclick="MR.entrarPorClic()">🚪 Entrar por la puerta</button>
+  <button id="hud-aula" class="oculto" onclick="MR.volverAlAula()">↩ Volver al aula</button>
+  <button id="hud-colocar" class="oculto" onclick="MR.colocarPortal()">📍 Poner la puerta delante</button>
+</div>
+
+<a-scene gltf-model="dracoDecoderPath: https://www.gstatic.com/draco/versioned/decoders/1.5.7/"
+         renderer="stencil: true; colorManagement: true"
+         webxr="requiredFeatures: local-floor; optionalFeatures: hand-tracking, bounded-floor"
+         xr-mode-ui="XRMode: xr">
+
+  <!-- 🎮 PLAYER -->
+  <a-entity id="playerRig" colision-malla
+            movement-controls="speed: 0.3; fly: false">
+
+    <a-entity id="camara" camera look-controls position="0 1.6 0"
+              raycaster="objects: .clickable; far: 15"
+              cursor="rayOrigin: mouse"></a-entity>
+
+    <!-- ✋ MANOS (seguimiento de manos del Quest 3): pellizco = clic -->
+    <a-entity id="manoDer" hand-tracking-controls="hand: right; modelColor: #f0e68c; modelOpacity: 0.6"
+              mano-puntero="hand: right"></a-entity>
+    <a-entity id="manoIzq" hand-tracking-controls="hand: left; modelColor: #f0e68c; modelOpacity: 0.6"
+              mano-puntero="hand: left; teletransporte: true"></a-entity>
+
+    <!-- 🎮 Mandos: siguen funcionando si alguien los coge (gatillo = clic) -->
+    <a-entity id="mandoDer" laser-controls="hand: right"
+              raycaster="objects: .clickable"
+              cursor="downEvents: triggerdown; upEvents: triggerup"></a-entity>
+
+    <a-entity id="mandoIzq" laser-controls="hand: left"
+              raycaster="objects: .clickable"
+              cursor="downEvents: triggerdown; upEvents: triggerup"></a-entity>
+
+  </a-entity>
+
+  <!-- 🏫 AULA (realidad mixta): la puerta a los Backrooms anclada al suelo.
+       A través del hueco se ve el World 1 (máscara de stencil). -->
+  <a-entity id="aula" visible="false" sin-colision>
+    <!-- hueco de la puerta: solo escribe en el stencil -->
+    <a-entity id="mascaraPortal" class="clickable" position="0 1.05 0" mascara-stencil="width: 1.0; height: 2.1"></a-entity>
+    <!-- marco -->
+    <a-box position="-0.56 1.1 0" width="0.12" height="2.2" depth="0.14" material="shader: flat; color: #c9b458"></a-box>
+    <a-box position="0.56 1.1 0" width="0.12" height="2.2" depth="0.14" material="shader: flat; color: #c9b458"></a-box>
+    <a-box position="0 2.22 0" width="1.24" height="0.14" depth="0.14" material="shader: flat; color: #c9b458"></a-box>
+    <!-- resplandor del borde -->
+    <a-plane position="0 1.1 -0.075" width="1.32" height="2.36" material="shader: flat; color: #fff6b0; opacity: 0.25; transparent: true; side: double"
+             animation="property: material.opacity; from: 0.12; to: 0.35; dir: alternate; loop: true; dur: 1400; easing: easeInOutSine"></a-plane>
+    <!-- felpudo y letrero -->
+    <a-plane position="0 0.005 0.45" rotation="-90 0 0" width="1.1" height="0.6" material="shader: flat; color: #6b5a2a; opacity: 0.8; transparent: true"></a-plane>
+    <a-entity position="0 2.55 0" etiqueta-viva="text: BACKROOMS · cruza la puerta; width: 1.3; height: 0.2; bgColor: #1b1b1b; textColor: #f0e68c; borde: #f0e68c"></a-entity>
+    <a-entity position="0 0.02 0.95" rotation="-90 0 0" etiqueta-viva="text: o pellizca el hueco para entrar; width: 1.0; height: 0.12; bgColor: #1b1b1b; textColor: #ffffff"></a-entity>
+  </a-entity>
+
+  <!-- 🖐️ MENÚ DE LA MUÑECA IZQUIERDA (aparece al mirar la palma) -->
+  <a-entity id="menuMuneca" menu-muneca sin-colision>
+    <a-entity data-boton="aula"      position="0 0.075 0"  etiqueta-viva="text: 🚪 Volver al aula; width: 0.17; height: 0.045; borde: #f0e68c"></a-entity>
+    <a-entity data-boton="colocar"   position="0 0.075 0"  etiqueta-viva="text: 📍 Puerta aquí delante; width: 0.17; height: 0.045; borde: #f0e68c"></a-entity>
+    <a-entity data-boton="hub"       position="0 0.025 0"  etiqueta-viva="text: 🏠 Ir al hub; width: 0.17; height: 0.045; borde: #f0e68c"></a-entity>
+    <a-entity data-boton="girar-izq" position="-0.045 -0.025 0" etiqueta-viva="text: ⟲ 45°; width: 0.08; height: 0.045; borde: #f0e68c"></a-entity>
+    <a-entity data-boton="girar-der" position="0.045 -0.025 0"  etiqueta-viva="text: 45° ⟳; width: 0.08; height: 0.045; borde: #f0e68c"></a-entity>
+    <a-entity id="infoRed" position="0 -0.07 0" etiqueta-viva="text: ⚪ conectando…; width: 0.17; height: 0.035; bgColor: #000000; textColor: #cccccc"></a-entity>
+  </a-entity>
+
+  <!-- 👥 AVATARES de los demás usuarios -->
+  <a-entity id="avatares" sin-colision></a-entity>
+
+  <!-- 🌍 WORLD 1 (MAIN) -->
+  <a-entity id="world_1" data-world="true">
+
+    <a-sound id="music_world1"
+             src="warm-nights.mp3"
+             sound="loop: true; volume: 4">
+    </a-sound>
+
+    <a-gltf-model src="backrooms_vr.glb"
+                  scale="1.25 1.25 1.25"></a-gltf-model>
+
+ <a-gltf-model id="cap1" src="captain_clark.glb" scale="3 3 3" gltf-model="captain_clark.glb" position="-23.846 1.31352 18.23469" rotation="0 90 0"></a-gltf-model>
+ <a-gltf-model id="cap2" src="captain_clark.glb" scale="3 3 3" gltf-model="captain_clark.glb" position="-23.846 1.2204 16.72182" rotation="0 90 -20"></a-gltf-model>
+ <a-gltf-model id="cap3" src="captain_clark.glb" scale="3 3 3" gltf-model="captain_clark.glb" position="-23.846 0.93728 14.99164" rotation="0 90 -40"></a-gltf-model>
+ <a-gltf-model id="cap4" src="captain_clark.glb" scale="3 3 3" gltf-model="captain_clark.glb" position="-23.846 0.54345 13.63034" rotation="0 90 -50"></a-gltf-model>
+ <a-gltf-model id="cap5" src="captain_clark.glb" scale="3 3 3" gltf-model="captain_clark.glb" position="-23.846 0.22743 11.68413" rotation="0 90 -60"></a-gltf-model>
+
+    <a-plane rotation="-90 0 0"
+             width="50" height="50"
+             position="0 -4.344 0"
+             material="color: #ba9652"></a-plane>
+
+    <a-sky color="#b28f50"></a-sky>
+
+    <!-- 💡 ILUMINACIÓN — World 1 no tenía ninguna luz, por eso los .glb
+         (captain_clark.glb) salían completamente negros: sin luz en la
+         escena, los materiales estándar de un glTF no reciben nada de luz. -->
+    <a-light type="ambient" color="#fff3e0" intensity="0.6"></a-light>
+    <a-light type="directional" color="#ffffff" intensity="0.8" position="10 15 5"></a-light>
+    <a-light type="point" color="#ffdca8" intensity="0.7" distance="60" position="-23.8 5 15"></a-light>
+
+    <!-- 🚪 PUERTA AL AULA (solo realidad mixta): está justo detrás del punto
+         de aparición. El hueco deja ver tu aula real (passthrough).
+         Cruzarla hacia atrás o pellizcarla = volver al aula. -->
+    <a-entity id="puerta_aula" visible="false" class="clickable" sin-colision
+              volver-aula-clic>
+      <a-entity position="0 1.05 0" agujero-passthrough="width: 1.0; height: 2.1"></a-entity>
+      <a-box position="-0.56 1.1 0" width="0.12" height="2.2" depth="0.14" material="shader: flat; color: #c9b458"></a-box>
+      <a-box position="0.56 1.1 0" width="0.12" height="2.2" depth="0.14" material="shader: flat; color: #c9b458"></a-box>
+      <a-box position="0 2.22 0" width="1.24" height="0.14" depth="0.14" material="shader: flat; color: #c9b458"></a-box>
+      <a-entity position="0 2.5 0" rotation="0 180 0" etiqueta-viva="text: ↩ AULA; width: 0.7; height: 0.18; borde: #f0e68c"></a-entity>
+    </a-entity>
+
+    <!-- 🔮 PORTAL → WORLD 2 -->
+    <a-entity id="portal_world2" 
+              class="clickable" 
+              geometry="primitive: torus" 
+              material="color: #7c3cff; emissive: #aa55ff; emissiveIntensity: 2" 
+              position="-78.3741 1.5492 12.30567" 
+              scale="0.75 0.75 0.75" rotation="0 53468952506.909996 0" 
+              portal-aaa="target: #world_2" 
+              portal-energy="">
+    </a-entity>
+
+    <!-- 🔮 PORTAL → WORLD 3 -->
+    <a-entity id="portal_world3" 
+              class="clickable" 
+              geometry="primitive: torus" 
+              material="color: #00ff88; emissive: #00ff88; emissiveIntensity: 2" 
+              position="-38.43431 1.31838 0.8166" 
+              scale="0.9865896757666517 0.9865896757666517 0.9865896757666517" 
+              rotation="0 53468914270.47 0" 
+              portal-aaa="target: #world_3" 
+              portal-energy="">
+    </a-entity>
+
+    <!-- 🔮 PORTAL → WORLD 4 -->
+    <a-entity id="portal_world4" 
+              class="clickable" 
+              geometry="primitive: torus" 
+              material="color: #ff2200; emissive: #ff2200; emissiveIntensity: 2" 
+              position="-54.10852 1.5029 -3.96282" 
+              scale="1.0791629953283008 1.0791629953283008 1.0791629953283008" 
+              rotation="0 53508625171.5 0" 
+              portal-aaa="target: #world_4" 
+              portal-energy="">
+    </a-entity>
+
+    <!-- 🔮 PORTAL → WORLD 5 (Carretera Perdida) -->
+    <a-entity id="portal_world5" 
+              class="clickable" 
+              geometry="primitive: torus" 
+              material="color: #f0e68c; emissive: #f0e68c; emissiveIntensity: 2" 
+              position="-65.5 1.5 16.50024" 
+              scale="1.0178576553961531 1.0178576553961531 1.0178576553961531" 
+              rotation="0 53559493166.61 0" 
+              portal-aaa="target: #world_5" 
+              portal-energy="">
+    </a-entity>
+  </a-entity>
+
+
+  <!-- 🌍 WORLD 2 -->
+  <a-entity id="world_2" data-world="true" visible="false">
+
+    <a-sound id="music_world2"
+             src="Kavinsky.mp3"
+             sound="loop: true; volume: 10">
+    </a-sound>
+
+    <a-gltf-model src="low_poly_mazda_mx-5_miata_na_update_opt.glb"
+                  position="-5 0 2"
+                  class="clickable"
+                  sound="src: rotativo.mp3; autoplay: false; loop: true; volume: 10" 
+                  sound-toggle
+                  rotation="0 -90 0"></a-gltf-model>
+
+    <a-gltf-model src="retro-futuristic_gas_station_opt.glb"></a-gltf-model>
+
+    <a-gltf-model src="truck_opt.glb"
+                  class="clickable"
+                  sound="src: camion.mp3; autoplay: false; loop: true; volume: 14" 
+                  sound-toggle
+                  position="-29 2.3 20"
+                  rotation="0 -20 0"></a-gltf-model>
+
+    <a-gltf-model src="Sol_opt.glb"
+                  position="-120 200 160"></a-gltf-model>
+
+    <a-gltf-model src="cielo_opt.glb"
+                  scale="300 300 300"></a-gltf-model>
+
+    <a-cylinder color="red"
+                position="0 1 4.34"
+                scale="0.2 0.2 0.2"></a-cylinder>
+
+    <!-- 🔮 PORTAL DE VUELTA -->
+    <a-entity id="portal_back_to_main" 
+              class="clickable" 
+              geometry="primitive: torus" 
+              material="color: #00ffff; emissive: #00ffff; emissiveIntensity: 2" 
+              position="-20 1.5 32.7" scale="1.07 1.07 1.07" 
+              portal-aaa="target: #world_1" 
+              portal-energy="">
+    </a-entity>
+
+    <a-entity light="type: ambient; color: #ffffff; intensity: 3"></a-entity>
+    <a-entity light="type: directional; position: 0 5 5; intensity: 1"></a-entity>
+
+  </a-entity>
+
+  <!-- 🌍 WORLD 3 -->
+  <a-entity id="world_3" data-world="true" visible="false">
+
+    <a-sound id="music_world3"
+             src="musica.mp3"
+             sound="loop: true; volume: 10">
+    </a-sound>
+
+    <!-- primitivas -->
+    <a-plane 
+        position="0 0 -4" 
+        scale="500 500 500" 
+        rotation="-90 0 0" 
+        width="4" 
+        height="4" 
+        color="#3B5110">
+    </a-plane>
+
+    <a-light type="ambient" color="#AFEEEE"></a-light>
+
+    <a-cylinder
+        position="40 10 -5"
+        scale="0.5 21 0.5"
+        color="brown"
+        class="clickable"
+        click-toggle="target: #flag"
+        event-set__enter="_event: raycaster-intersected; _target: #flag; visible: true"
+        event-set__leave="_event: raycaster-intersected-cleared; _target: #flag; visible: false">
+
+      <a-box 
+          id="flag"
+          src="images.png" 
+          color="#FFFFFF" 
+          visible="false" 
+          position="0 0.35 8" 
+          scale="15 0.3 0.05" 
+          rotation="0 85 0">
+      </a-box>
+    </a-cylinder>
+
+    <!-- =========EDIFICIOS========== -->
+
+    <a-gltf-model id="templo" src="https://cdn.tinyglb.com/models/4a2392a6fa04477493b9015416cf0571.glb" 
+        position="0 0 -40" 
+        scale="0.01 0.01 0.01" 
+        rotation="0 0 0">
+    </a-gltf-model>
+
+    <a-gltf-model src="https://cdn.tinyglb.com/models/26df246b648249448a9a85552e3e07bd.glb" 
+        position="0 0 -15" 
+        scale="14 14 14">
+      <a-light type="directional" position="5 10 5" intensity="1" color="#ffffff"></a-light>
+    </a-gltf-model>
+
+    <a-gltf-model src="https://cdn.tinyglb.com/models/c728a8c818a148aeab0f867e2e917b66.glb" 
+        position="-30 0 5" 
+        scale="1 1 1" 
+        rotation="0 90 0">
+    </a-gltf-model>
+
+    <a-gltf-model src="https://cdn.tinyglb.com/models/5fb5871d0e6b46868efd2a1f92bc8704.glb" 
+        position="-30 0 -20" 
+        scale="1.5 1.5 1.5" 
+        rotation="0 55 0">
+    </a-gltf-model>
+
+    <a-gltf-model src="https://cdn.tinyglb.com/models/783d20c383b14c77a3c02175dfe4d5ea.glb" 
+        position="40 9 -28" 
+        scale="0.1 0.1 0.1" 
+        rotation="0 -62 0">
+    </a-gltf-model>
+
+    <!-- =========PAISAJE========== -->
+
+    <a-gltf-model src="https://cdn.tinyglb.com/models/262ef18899b449b798df4de8d079b5e2.glb" 
+        position="30 0 -49" 
+        scale="40 40 40" 
+        rotation="0 90 0"
+        animation="property: rotation; to: 0 360 0; loop: true; dur: 700000; easing: linear">
+    </a-gltf-model>
+
+    <a-gltf-model src="https://cdn.tinyglb.com/models/8719c13ab9a5456c9e80ba55cc33ef31.glb" 
+        position="100 0 -300" 
+        scale="200 200 200" 
+        rotation="0 -180 0">
+    </a-gltf-model>
+
+    <a-gltf-model src="https://cdn.tinyglb.com/models/8719c13ab9a5456c9e80ba55cc33ef31.glb" 
+        position="-100 0 -300" 
+        scale="200 200 200" 
+        rotation="0 180 0">
+    </a-gltf-model>
+
+    <a-gltf-model src="https://cdn.tinyglb.com/models/24124bd7335c44d29df2e26928cff98c.glb" 
+        position="-20 0 -40" 
+        scale="40 40 40"
+        class="clickable"
+        click-toggle="target: #petalos"
+        event-set__enter="_event: raycaster-intersected; _target: #petalos; visible: true"
+        event-set__leave="_event: raycaster-intersected-cleared; _target: #petalos; visible: false">
+    </a-gltf-model>
+
+    <!-- PETALOS -->
+    <a-entity id="petalos" visible="false">
+
+      <a-plane position="-20 8 -40" width="0.3" height="0.15" color="#ffc0cb"
+               rotation="0 0 35" opacity="0.8"
+               animation="property: position; to: -18 0 -41; dur: 5000; loop: true">
+      </a-plane>
+
+      <a-plane position="-21 9 -39" width="0.25" height="0.12" color="#ffb6c1"
+               rotation="0 0 -20" opacity="0.7"
+               animation="property: position; to: -22 0 -42; dur: 6500; loop: true">
+      </a-plane>
+
+      <a-plane position="-19 7 -41" width="0.2" height="0.1" color="#ffd1dc"
+               rotation="0 0 60" opacity="0.6"
+               animation="property: position; to: -17 0 -39; dur: 4500; loop: true">
+      </a-plane>
+
+      <a-plane position="-20 10 -40" width="0.28" height="0.14" color="#ffc0cb"
+               rotation="0 0 -45" opacity="0.75"
+               animation="property: position; to: -23 0 -43; dur: 7000; loop: true">
+      </a-plane>
+
+    </a-entity>
+
+    <a-gltf-model src="cerezo.glb" position="20 0 -50" scale="40 40 40"></a-gltf-model>
+
+    <a-gltf-model src="https://cdn.tinyglb.com/models/24124bd7335c44d29df2e26928cff98c.glb" 
+        position="30 0 -49" 
+        scale="40 40 40" 
+        rotation="0 90 0">
+    </a-gltf-model>
+
+    <!-- =========PLANTAS========== -->
+
+    <a-gltf-model src="https://cdn.tinyglb.com/models/3751678cfd104f9887a0879e7d3f6bb2.glb" 
+        position="-20 0 -40" scale="2 2 2">
+    </a-gltf-model>
+
+    <a-gltf-model src="https://cdn.tinyglb.com/models/3751678cfd104f9887a0879e7d3f6bb2.glb" 
+        position="20 0 -50" scale="2 2 2" rotation="0 90 0">
+    </a-gltf-model>
+
+    <a-gltf-model src="https://cdn.tinyglb.com/models/417f89856d584515bc1882e1a658c3b2.glb" 
+        position="-4 0 -28" scale="0.15 0.15 0.15">
+    </a-gltf-model>
+
+    <a-gltf-model src="https://cdn.tinyglb.com/models/417f89856d584515bc1882e1a658c3b2.glb" 
+        position="4 0 -28" scale="0.15 0.15 0.15" rotation="0 180 0">
+    </a-gltf-model>
+
+    <!-- =========DECORACION========== -->
+
+    <a-gltf-model src="https://cdn.tinyglb.com/models/290528bf459c4c4abb680d2d6593fb88.glb" 
+        position="23 0 -45" scale="0.5 0.5 0.5" rotation="0 -15 0">
+    </a-gltf-model>
+
+    <a-gltf-model src="https://cdn.tinyglb.com/models/f611c22f5f0a48aa99333f388df8b12a.glb" 
+        position="4 0 -10" scale="1.5 1.5 1.5" rotation="0 -90 0">
+    </a-gltf-model>
+
+    <a-gltf-model src="https://cdn.tinyglb.com/models/f611c22f5f0a48aa99333f388df8b12a.glb" 
+        position="-4 0 -10" scale="1.5 1.5 1.5" rotation="0 -90 0">
+    </a-gltf-model>
+
+    <a-gltf-model src="https://cdn.tinyglb.com/models/b9e81d602f284278b65ff93dd703aecb.glb" 
+        position="18 0 -48" scale="0.02 0.02 0.02">
+      <a-light type="point" position="18 0 -45" color="#ffb347" intensity="5" distance="15"></a-light>
+    </a-gltf-model>
+
+    <a-gltf-model src="https://cdn.tinyglb.com/models/b9e81d602f284278b65ff93dd703aecb.glb" 
+        position="30 0 -45" scale="0.02 0.02 0.02">
+      <a-light type="point" position="18 0 -45" color="#ffb347" intensity="5" distance="15"></a-light>
+    </a-gltf-model>
+
+    <a-gltf-model src="https://cdn.tinyglb.com/models/b9e81d602f284278b65ff93dd703aecb.glb" 
+        position="-15 0 -35" scale="0.02 0.02 0.02">
+      <a-light type="point" position="18 0 -45" color="#ffb347" intensity="5" distance="15"></a-light>
+    </a-gltf-model>
+
+    <a-gltf-model src="https://cdn.tinyglb.com/models/54b114fb59464f7a9f1dcbe083fbbd0e.glb" 
+        position="38 0 -37.5" scale="3 3 3" rotation="0 100 0"
+        class="clickable"
+        click-toggle="target: #mensajePozo"
+        event-set__enter="_event: raycaster-intersected; _target: #mensajePozo; visible: true"
+        event-set__leave="_event: raycaster-intersected-cleared; _target: #mensajePozo; visible: false">
+    </a-gltf-model>
+
+    <!-- MENSAJE FLOTANTE -->
+    <a-text id="mensajePozo"
+        value="静かな心は水のよう&#10;Shizukana kokoro wa mizu no you&#10;&#10;A calm heart is like water"
+        position="34 6 -37.5"
+        rotation="0 -70 0"
+        anchor="center"
+        color="#ffd7f1"
+        width="20"
+        opacity="0.85"
+        visible="false"
+        shader="msdf"
+        animation="property: position; dir: alternate; dur: 2000; loop: true; to: 34 6.5 -37.5">
+    </a-text>
+
+    <a-light type="point" position="38 5 -37.5" color="#ffb7e8" intensity="1" distance="10"></a-light>
+
+    <a-gltf-model src="https://cdn.tinyglb.com/models/a66f326b06a84414b377269da9d6d355.glb" 
+        position="-20 6.7 -28" scale="0.004 0.004 0.004" rotation="0 -45 0">
+    </a-gltf-model>
+
+    <!-- 🔮 PORTAL DE VUELTA (TORII) -->
+    <a-entity id="portal_torii_aaa" class="clickable" 
+              position="13.85591 0.20124 12.50308" 
+              rotation="0 90 0" scale="2.4 2.4 2.404" 
+              portal-aaa="target: #world_1" 
+              portal-energy="">
+
+      <!-- pilares -->
+      <a-box position="-0.9 1 0" width="0.25" height="3" depth="0.25" color="#b30000"></a-box>
+      <a-box position="0.9 1 0" width="0.25" height="3" depth="0.25" color="#b30000"></a-box>
+
+      <!-- travesaño inferior -->
+      <a-box position="0 2.1 0" width="2.2" height="0.25" depth="0.25" color="#7a0000"></a-box>
+
+      <!-- travesaño superior -->
+      <a-box position="0 2.6 0" width="2.8" height="0.25" depth="0.25" color="#ff2a2a"></a-box>
+
+      <!-- núcleo energético -->
+      <a-sphere radius="0.4" position="0 1.8 0" 
+                material="opacity: 0.8; color: #ff3df2; emissive: #ff3df2; emissiveIntensity: 2"
+                animation="dir: alternate; dur: 900; loop: true; property: scale; to: 1.4 1.4 1.4">
+      </a-sphere>
+
+      <!-- anillo energético -->
+      <a-torus radius="1.2" radius-tubular="0.05" rotation="90 203.02898370398202 0" 
+               material="color: #00ffff; emissive: #00ffff; emissiveIntensity: 1.5"
+               animation="dur: 4000; loop: true; property: rotation; to: 90 360 0">
+      </a-torus>
+
+      <!-- partículas sakura -->
+      <a-entity id="sakura_particles">
+        <a-plane position="1.92 -1.81 0" width="0.2" height="0.2" 
+                 material="opacity: 0.8; transparent: true; color: #ffb7c5"
+                 animation="dur: 5000; loop: true; property: position; to: 2 -2 0">
+        </a-plane>
+        <a-plane position="-0.4 -1.2 0.15" width="0.15" height="0.15" 
+                 material="opacity: 0.7; transparent: true; color: #ffd1dc"
+                 animation="dur: 6500; loop: true; property: position; to: -1 -3 0">
+        </a-plane>
+        <a-plane position="0.91 -2.74 -0.02" width="0.18" height="0.18" 
+                 material="opacity: 0.6; transparent: true; color: #ff9fb0"
+                 animation="dur: 5500; loop: true; property: position; to: 1 -3 0">
+        </a-plane>
+      </a-entity>
+
+      <!-- sonido portal -->
+      <a-sound src="portal_whoosh.mp3" autoplay="false" volume="1" position="0 1 0"></a-sound>
+
+      <!-- luz interna -->
+      <a-entity light="color: #ff66cc; distance: 6; intensity: 2; type: point" position="0 2 0"></a-entity>
+
+    </a-entity>
+
+  </a-entity>
+
+  <!-- 🌍 WORLD 4 -->
+  <!-- Recentrado: todos los elementos internos desplazados por el inverso
+       de la posición original del stranger_things_room.glb
+       (-54.662, -0.344, -6.106) → offset aplicado: +54.662, +0.344, +6.106 -->
+  <a-entity id="world_4" data-world="true" visible="false">
+
+    <a-sound id="music_world4"
+             src="Neverending Story - Limahl - Extended.mp3"
+             sound="loop: true; volume: 10">
+    </a-sound>
+
+    <!-- modelo centrado en el origen -->
+    <a-gltf-model src="stranger_things_room.glb" position="0 0 0" scale="2 2 2"></a-gltf-model>
+
+    <a-gltf-model src="sky_opt.glb" gltf-model="sky_opt.glb" 
+                  position="-4.20978 1.40285 -2.76337" 
+                  rotation="0 0 0" 
+                  animation="property: rotation; to: 0 360 0; loop: true; dur: 100000; easing: linear">
+    </a-gltf-model>
+
+    <a-gltf-model src="Sol_opt.glb" gltf-model="sun_opt.glb" 
+                  position="-7.93262 0.344 19.10341" 
+                  scale="0.5 0.5 0.5" 
+                  animation="property: rotation; to: 0 360 0; loop: true; dur: 100000; easing: linear">
+    </a-gltf-model>
+
+    <!-- 🩸 PORTAL DEL REVÉS (UPSIDE DOWN GATE) -->
+    <a-entity id="portal_upsidedown_aaa" class="clickable" 
+              position="3.207 0.579 -2.678" 
+              rotation="0 90 0" scale="0.75 0.75 0.75" 
+              portal-aaa="target: #world_1" 
+              portal-energy="">
+
+      <!-- estructura orgánica: en vez de pilares rectos, troncos retorcidos -->
+      <a-cylinder position="-0.9 1 0" radius="0.15" height="3" 
+                  material="color: #1a0505; roughness: 1" 
+                  rotation="0 0 8"></a-cylinder>
+      <a-cylinder position="0.9 1 0" radius="0.15" height="3" 
+                  material="color: #1a0505; roughness: 1" 
+                  rotation="0 0 -8"></a-cylinder>
+
+      <!-- travesaño inferior: raíz gruesa -->
+      <a-box position="0 2.1 0" width="2.2" height="0.3" depth="0.3" 
+             material="color: #120303; roughness: 1"></a-box>
+
+      <!-- travesaño superior: fisura luminosa -->
+      <a-box position="0 2.6 0" width="2.8" height="0.2" depth="0.2" 
+             material="color: #3a0000; emissive: #b30000; emissiveIntensity: 0.6"></a-box>
+
+      <!-- núcleo energético: latido rojo pulsante -->
+      <a-sphere radius="0.4" position="0 1.8 0" 
+                material="opacity: 0.85; color: #8a0303; emissive: #ff1a1a; emissiveIntensity: 2.2"
+                animation="dir: alternate; dur: 700; loop: true; property: scale; to: 1.5 1.5 1.5">
+      </a-sphere>
+
+      <!-- anillo de grietas -->
+      <a-torus radius="1.2" radius-tubular="0.06" rotation="90 203.02898370398202 0" 
+               material="color: #ff3300; emissive: #ff3300; emissiveIntensity: 1.8; roughness: 0.9"
+               animation="dur: 6000; loop: true; property: rotation; to: 90 -160 0">
+      </a-torus>
+
+      <!-- niebla volumétrica roja -->
+      <a-entity id="fog_layer" geometry="primitive: plane; width: 4; height: 4"
+                material="opacity: 0.15; transparent: true; color: #4d0000; side: double"
+                position="0 1.5 0.3"
+                animation="dir: alternate; dur: 3000; loop: true; property: material.opacity; to: 0.3">
+      </a-entity>
+
+      <!-- zarcillos/esporas -->
+      <a-entity id="upside_down_particles">
+        <a-plane position="1.92 -1.81 0" width="0.15" height="0.4" 
+                 material="opacity: 0.75; transparent: true; color: #5c1010; roughness: 1"
+                 rotation="0 0 25"
+                 animation="dur: 5000; loop: true; property: position; to: 2 -2.4 0">
+        </a-plane>
+        <a-plane position="-0.4 -1.2 0.15" width="0.1" height="0.3" 
+                  material="opacity: 0.6; transparent: true; color: #3d0a0a; roughness: 1"
+                  rotation="0 0 -15"
+                  animation="dur: 6500; loop: true; property: position; to: -1 -3.5 0">
+        </a-plane>
+        <a-sphere position="0.91 -2.74 -0.02" radius="0.05"
+                  material="opacity: 0.65; transparent: true; color: #ff5533; emissive: #ff3300; emissiveIntensity: 1.5"
+                  animation="dur: 4000; loop: true; property: position; to: 1 -3.6 0.1">
+        </a-sphere>
+        <a-sphere position="-0.6 -2.1 0.1" radius="0.04"
+                  material="opacity: 0.6; transparent: true; color: #ff5533; emissive: #ff3300; emissiveIntensity: 1.3"
+                  animation="dur: 4700; loop: true; property: position; to: -0.7 -3.3 0.05">
+        </a-sphere>
+      </a-entity>
+
+      <!-- luz ambiental rojiza puntual -->
+      <a-light type="point" color="#ff2200" intensity="0.8" distance="4" 
+               position="0 1.8 0.5"></a-light>
+
+    </a-entity>
+
+    <a-entity light="type: ambient; color: #ff2200; intensity: 0.3"></a-entity>
+    <a-entity light="type: directional; color: #ff2200; intensity: 1" 
+              position="2 4 1"></a-entity>
+	    <a-entity light="color: #ff2200; intensity: 1" position="1.51267 1.74957 5.16604"></a-entity>
+	   <a-entity light="color: #ff2200; intensity: 1" position="4.96815 2.1794 -4.81062"></a-entity>
+	  
+	  
+ <a-entity light="color: #FFA900; intensity: 4.35; type: point" position="-2.80163 2.20419 -6.93355"></a-entity>
+	  
+	  <a-entity light="color: #FFA900; intensity: 4.35; type: point" position="-2.80163 2.20419 -1.86074"></a-entity>
+	  
+	  
+    <a-sky src="noche_cielo.jpg" color="#ffffff"></a-sky>
+
+  </a-entity>
+
+  <!-- 🌍 WORLD 5 — CARRETERA PERDIDA (Unknown Road) -->
+  <a-entity id="world_5" data-world="true" visible="false" position="33.98853 0 0">
+
+    <a-sound id="music_world5"
+             src="Sit Down. Stand Up(MP3_160K).mp3"
+             sound="loop: true; volume: 10">
+    </a-sound>
+
+    <!-- suelo y cielo -->
+    <a-plane src="suelo.jpg" position="-5 0.1 -5" rotation="-90 0 0"
+              width="5" height="5" color="#7BC8A4"></a-plane>
+    <a-sky src="cielo.jpg" color="#ECECEC"></a-sky>
+
+    <!-- iluminación -->
+    <a-light type="ambient" color="#5B27F5"></a-light>
+    <a-light type="point" position="-4.20478 1.51209 -4.82557" intensity="5"></a-light>
+    <a-light type="point" position="-3.71273 1.60412 -4.92978" intensity="5" light="color: #ff0000"></a-light>
+    <a-light type="point" position="0.80876 5.58994 -9.03775"
+             intensity="10" light="color: #ffca82; distance: 18; intensity: 140; castShadow: true"></a-light>
+    <a-light type="point" position="-6.14969 5.83411 10.44772"
+             intensity="10" light="color: #ffca82; distance: 18; intensity: 140; castShadow: true"></a-light>
+    <a-light type="point" position="27 5.8 -62" intensity="5" light="color: #ffca82; distance: 18; intensity: 80"></a-light>
+
+    <!-- ══ MÁQUINA EXPENDEDORA ══
+         · Al mirarla con el raycaster (mouseenter): suena el zumbido ambiente y aparece el texto.
+         · Al pulsar el GATILLO (click, vía cursor de laser-controls): sound-toggle activa/desactiva la música. -->
+    <a-gltf-model id="maquinaExpendedora" class="clickable"
+      src="7286875bc78e4ef496b64831b2348f31.glb" scale="1 1 1" position="-5 0 -5"
+      sound="src: Sit Down. Stand Up(MP3_160K).mp3; autoplay: false; loop: true; volume: 25"
+      sound__buzz="on: mouseenter; src: freesound_community-room-with-buzz-incandescent-light-bulb-23892.mp3; volume: 50"
+      sound-toggle
+      event-set__enter="_event: raycaster-intersected; _target: #boxText; visible: true"
+      event-set__leave="_event: raycaster-intersected-cleared; _target: #boxText; visible: false">
+    </a-gltf-model>
+    <a-entity id="boxText" position="-4.44162 2.7696 -5.05318" rotation="0 90 0" visible="false"
+              canvas-label="text: It's an abandoned vending machine.; width: 3; height: 0.6"></a-entity>
+
+    <!-- ══ VALLAS DE PELIGRO ══
+         Mismo esquema de interacción que la máquina expendedora:
+         mouseenter → aviso sonoro; click con el gatillo → sound-toggle activa/desactiva la alarma.
+         ⚠️ Sustituye "aviso_peligro.mp3" y "alarma_peligro.mp3" por tus archivos de audio reales. -->
+    <a-gltf-model id="senal1" class="clickable" src="4349861a89594fb8923aebe3479420ec.glb"
+      position="28.61811 -0.00967 -60.20071" rotation="0 -50 0"
+      sound="src: alarma_peligro.mp3; autoplay: false; loop: true; volume: 25"
+      sound__buzz="on: mouseenter; src: aviso_peligro.mp3; volume: 40"
+      sound-toggle
+      event-set__enter="_event: raycaster-intersected; _target: #boxText-1; visible: true"
+      event-set__leave="_event: raycaster-intersected-cleared; _target: #boxText-1; visible: false"></a-gltf-model>
+
+    <a-gltf-model id="senal2" class="clickable" src="4349861a89594fb8923aebe3479420ec.glb"
+      position="26.90633 0.0453 -62.30645" rotation="0 -60 0"
+      sound="src: alarma_peligro.mp3; autoplay: false; loop: true; volume: 25"
+      sound__buzz="on: mouseenter; src: aviso_peligro.mp3; volume: 40"
+      sound-toggle
+      event-set__enter="_event: raycaster-intersected; _target: #boxText-2; visible: true"
+      event-set__leave="_event: raycaster-intersected-cleared; _target: #boxText-2; visible: false"></a-gltf-model>
+
+    <a-gltf-model id="senal3" class="clickable" src="4349861a89594fb8923aebe3479420ec.glb"
+      position="25.73594 0.0453 -64.55948" rotation="0 -60 0"
+      sound="src: alarma_peligro.mp3; autoplay: false; loop: true; volume: 25"
+      sound__buzz="on: mouseenter; src: aviso_peligro.mp3; volume: 40"
+      sound-toggle
+      event-set__enter="_event: raycaster-intersected; _target: #boxText-3; visible: true"
+      event-set__leave="_event: raycaster-intersected-cleared; _target: #boxText-3; visible: false"></a-gltf-model>
+
+    <a-entity id="boxText-1" position="28.33448 1.90655 -59.94273" rotation="0 130 0" visible="false"
+              canvas-label="text: DANGER! STAY AWAY!; width: 3; height: 0.6"></a-entity>
+    <a-entity id="boxText-2" position="26.74534 2.6601 -62.68323" rotation="0 130 0" visible="false"
+              canvas-label="text: DANGER! STAY AWAY!; width: 3; height: 0.6"></a-entity>
+    <a-entity id="boxText-3" position="26.30163 1.93453 -65.36191" rotation="0 130 0" visible="false"
+              canvas-label="text: DANGER! STAY AWAY!; width: 3; height: 0.6"></a-entity>
+
+    <!-- props decorativos -->
+    <a-gltf-model src="9b66b3aea2cf42dfadb35fb44f5cf3e4.glb"></a-gltf-model>
+    <a-gltf-model src="b4df86f1e6374bed90997ec6b339887a.glb" scale="0.5 0.5 0.5"
+      position="-0.98379 0.10099 -7.48522" rotation="10 0 10"></a-gltf-model>
+
+    <!-- elementos animados -->
+    <a-entity gltf-model="f13f73463dfb40f8a429c2f4b60c563f.glb" animation-mixer="" boost-emissive="gyroColor: #0033ff"
+      position="-5.58432 1.03715 9.02051" rotation="80 0 0"></a-entity>
+    <a-entity gltf-model="f13f73463dfb40f8a429c2f4b60c563f.glb" animation-mixer="" boost-emissive="gyroColor: #0033ff"
+      position="-1.45037 1.03715 4.66796" rotation="0 80 80"></a-entity>
+    <a-entity gltf-model="f13f73463dfb40f8a429c2f4b60c563f.glb" animation-mixer="" boost-emissive="gyroColor: #0033ff"
+      position="-1.0783 1.69295 11.42761" rotation="180 59 0"></a-entity>
+
+    <!-- 🔮 PORTAL DE VUELTA → WORLD 1 -->
+    <a-entity id="portal_back_to_main_w5"
+              class="clickable"
+              geometry="primitive: torus"
+              material="color: #f0e68c; emissive: #f0e68c; emissiveIntensity: 2"
+              position="20.84891 1.6 -1.37972"
+              scale="1 1 1"
+              rotation="0 -86.21385315905319 0"
+              portal-aaa="target: #world_1"
+              portal-energy="">
+    </a-entity>
+
+  </a-entity>
+
+</a-scene>
+
+<script>
+  /* Al arrancar, solo el mundo visible es interactivo */
+  (function () {
+    const escena = document.querySelector('a-scene');
+    const iniciar = () => {
+      const visible = [...document.querySelectorAll('[data-world]')].find(w => w.getAttribute('visible') !== false);
+      aislarMundos(visible ? '#' + visible.id : '#world_1');
+    };
+    if (escena.hasLoaded) iniciar(); else escena.addEventListener('loaded', iniciar);
+  })();
+</script>
+
+</body>
+</html>

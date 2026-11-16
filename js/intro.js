@@ -189,7 +189,7 @@
         <g class="crecePuerta rapida">${puerta(400, 400, 1.3)}</g>` }
   ];
 
-  /* Duración de cada locución (ms). Si se regeneran los mp3, actualizar. */
+  /* Duración de cada locución (ms): valores de reserva; se corrigen al cargar los mp3. */
   const VOZ = [5690, 7650, 6660, 7390, 5670, 8070, 5690, 6660, 4130];
   // Un único reproductor: una vez desbloqueado con un toque, sirve para
   // todas las escenas (iPhone/iPad exigen esto; en el Quest también va bien).
@@ -199,6 +199,13 @@
   window.__vozTutorial = voz;
   ESCENAS.forEach((_, i) => { const l = document.createElement('link'); l.rel = 'prefetch'; l.href = urlVoz(i); document.head.appendChild(l); });
   const audios = ESCENAS.map(() => voz);   // compatibilidad con el resto del código
+  // Duración real de cada locución: se lee de los propios archivos, así que
+  // si se sustituyen por grabaciones nuevas, los tiempos se ajustan solos.
+  ESCENAS.forEach((_, i) => {
+    const a = new Audio(); a.preload = 'metadata';
+    a.addEventListener('loadedmetadata', () => { if (isFinite(a.duration) && a.duration > 0) VOZ[i] = Math.round(a.duration * 1000); });
+    a.src = urlVoz(i);
+  });
   let conVoz = true;
   ESCENAS.forEach((e) => { e.anim = e.dur; });
   // Con voz, la escena dura lo que la locución (+ un respiro) y la animación se ralentiza a la par

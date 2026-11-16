@@ -11,6 +11,11 @@ El proyecto VR original (`EPE-IESCarmen-de-Burgos`) no se ha modificado: esto es
 | Modo | Solo VR | **AR / realidad mixta** (passthrough) + VR |
 | Usuarios | Uno | **Varios a la vez**, sin servidor (WebRTC) |
 
+## Tutorial animado
+
+Al abrir la página por primera vez sale una presentación animada (unos 55 s) que explica la interfaz: manos y pellizco, modo AR y puerta, cruzar, teletransporte, menú de la muñeca y multiusuario. Se puede saltar, pausar y navegar con ◀ ▶. Después solo vuelve a salir con el botón **🎬 Ver tutorial** de la pantalla de inicio.
+`?intro=1` la muestra siempre · `?intro=0` no la muestra nunca.
+
 ## Cómo se usa en el Quest 3
 
 1. Activa el seguimiento de manos en el Quest (*Configuración → Movimiento → Seguimiento de manos*).
@@ -43,5 +48,6 @@ El proyecto VR original (`EPE-IESCarmen-de-Burgos`) no se ha modificado: esto es
 
 - `js/mr-core.js` → realidad mixta, puerta con stencil, manos, teletransporte y menú de muñeca.
 - `js/multijugador.js` → avatares y sincronización.
+- `js/intro.js` → tutorial animado (SVG + CSS, sin vídeo).
 - `lib/trystero.min.js` → librería WebRTC (Trystero 0.27, empaquetada en local).
 - `colisiones.js` → igual que el original, pero se desactiva en el aula y se reinicia tras cada salto.

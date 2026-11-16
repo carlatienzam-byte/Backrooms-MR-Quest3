@@ -15,6 +15,7 @@ El proyecto VR original (`EPE-IESCarmen-de-Burgos`) no se ha modificado: esto es
 
 Al abrir la página por primera vez sale una presentación animada (unos 55 s) que explica la interfaz: manos y pellizco, modo AR y puerta, cruzar, teletransporte, menú de la muñeca y multiusuario. Se puede saltar, pausar y navegar con ◀ ▶. Después solo vuelve a salir con el botón **🎬 Ver tutorial** de la pantalla de inicio.
 `?intro=1` la muestra siempre · `?intro=0` no la muestra nunca.
+Lleva **locución con voz masculina** en castellano (`audio/tutorial/escena0-8.mp3`, generada con Piper TTS, voz *carlfm*). El botón 🔊/🔇 la quita. La primera vez sale una portada con «▶ Empezar», porque el navegador no deja sonar audio sin un toque previo.
 
 ## Cómo se usa en el Quest 3
 

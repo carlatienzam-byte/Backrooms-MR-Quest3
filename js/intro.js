@@ -7,6 +7,10 @@
    · "Saltar" la cierra. Una vez vista, solo vuelve a salir con el botón
      "🎬 Ver tutorial" de la pantalla de inicio.
    · ?intro=1 → mostrarla siempre ·  ?intro=0 → no mostrarla nunca
+   · Voz masculina (audio/tutorial/escenaN.mp3, generada con Piper TTS,
+     voz "carlfm" en castellano). Botón 🔊/🔇 para quitarla. Como el
+     navegador no deja sonar audio sin un toque previo, la primera vez
+     sale una portada con "Empezar con voz".
    ════════════════════════════════════════════════════════════════════ */
 (function () {
   const params = new URLSearchParams(location.search);
@@ -185,6 +189,21 @@
         <g class="crecePuerta rapida">${puerta(400, 400, 1.3)}</g>` }
   ];
 
+  /* Duración de cada locución (ms). Si se regeneran los mp3, actualizar. */
+  const VOZ = [5710, 7680, 6670, 7420, 5690, 8090, 5710, 6700, 4150];
+  const audios = ESCENAS.map((_, i) => { const a = new Audio('audio/tutorial/escena' + i + '.mp3'); a.preload = 'auto'; return a; });
+  let conVoz = true;
+  ESCENAS.forEach((e) => { e.anim = e.dur; });
+  // Con voz, la escena dura lo que la locución (+ un respiro) y la animación se ralentiza a la par
+  const duracion = (i) => { const e = ESCENAS[i]; if (!e.anim) return 0; return conVoz ? Math.max(e.anim, VOZ[i] + 900) : e.anim; };
+  function callar() { audios.forEach((a) => { a.pause(); }); }
+  function hablar(i) {
+    callar();
+    if (!conVoz) return;
+    const a = audios[i]; try { a.currentTime = 0; } catch (e) {}
+    a.play().catch(() => {});
+  }
+
   /* ───────── estilos ───────── */
   const CSS = `
   #intro{position:fixed;inset:0;z-index:10050;background:${OSC};color:#fff;font-family:sans-serif;
@@ -310,6 +329,7 @@
   @keyframes escribe{from{opacity:0}5%{opacity:1}}
 
   /* final */
+  #intro.portada .controles{visibility:hidden}
   #intro .final-acciones{display:flex;gap:12px;justify-content:center;margin-top:10px}
   `;
 
@@ -327,6 +347,7 @@
         <button data-a="pausa" aria-label="Pausa">❚❚</button>
         <span class="puntos">${ESCENAS.map((_, i) => `<i data-i="${i}"><b></b></i>`).join('')}</span>
         <button data-a="sig" aria-label="Siguiente">▶</button>
+        <button data-a="voz" aria-label="Voz">🔊</button>
         <button data-a="saltar">Saltar ▸▸</button>
       </div>`;
     document.body.appendChild(raiz);
@@ -335,7 +356,8 @@
     raiz.addEventListener('click', (e) => {
       const b = e.target.closest('[data-a],[data-i]'); if (!b) return;
       if (b.dataset.i !== undefined) return mostrar(+b.dataset.i);
-      ({ ant: () => mostrar(Math.max(0, idx - 1)), sig: () => mostrar(idx + 1), pausa: alternarPausa, saltar: cerrar, empezar: cerrar, repetir: () => mostrar(0) })[b.dataset.a]();
+      ({ ant: () => mostrar(Math.max(0, idx - 1)), sig: () => mostrar(idx + 1), pausa: alternarPausa, saltar: cerrar, empezar: cerrar,
+         repetir: () => mostrar(0), voz: alternarVoz, comenzar: () => { raiz.classList.remove('portada'); mostrar(0); } })[b.dataset.a]();
     });
     document.addEventListener('keydown', teclas);
   }
@@ -359,8 +381,17 @@
     pausado = !pausado;
     raiz.classList.toggle('pausa', pausado);
     btnPausa.textContent = pausado ? '▶︎' : '❚❚';
-    if (pausado) { clearTimeout(temporizador); restante -= performance.now() - inicio; }
-    else if (ESCENAS[idx].dur) programar(Math.max(300, restante));
+    if (pausado) { clearTimeout(temporizador); restante -= performance.now() - inicio; callar(); }
+    else {
+      if (duracion(idx)) programar(Math.max(300, restante));
+      if (conVoz && !audios[idx].ended) audios[idx].play().catch(() => {});
+    }
+  }
+
+  function alternarVoz() {
+    conVoz = !conVoz;
+    raiz.querySelector('[data-a="voz"]').textContent = conVoz ? '🔊' : '🔇';
+    if (!conVoz) callar(); else if (!pausado) hablar(idx);
   }
 
   function mostrar(i) {
@@ -379,21 +410,43 @@
       if (k === i && !e.dur) p.className = 'hecho';
     });
     if (pausado) alternarPausa();
-    programar(e.dur);
+    const d = duracion(i);
+    // la barra de progreso y la animación siguen a la locución
+    const barra = puntos[i] && puntos[i].querySelector('b');
+    if (barra && d) barra.style.animation = `barra ${d}ms linear both`;
+    if (d && e.anim && d !== e.anim) {
+      const svg = escenario.querySelector('svg');
+      requestAnimationFrame(() => svg.getAnimations({ subtree: true }).forEach((a) => {
+        const t = a.effect && a.effect.getTiming();
+        if (t && t.iterations === 1) a.playbackRate = e.anim / d;
+      }));
+    }
+    hablar(i);
+    programar(d);
   }
 
   function cerrar() {
     clearTimeout(temporizador);
+    callar();
     marcar();
     raiz.classList.add('fuera');
     setTimeout(() => { raiz.style.display = 'none'; escenario.innerHTML = ''; }, 650);
   }
 
-  function abrir() {
+  // conGesto = el usuario acaba de tocar algo → el audio puede sonar ya.
+  // Si no, se muestra una portada con "Empezar con voz" (ese toque desbloquea el audio).
+  function abrir(conGesto) {
     if (!raiz) construir();
     raiz.style.display = ''; void raiz.offsetWidth; raiz.classList.remove('fuera');
     pausado = false; raiz.classList.remove('pausa'); btnPausa.textContent = '❚❚';
-    mostrar(0);
+    if (conGesto === true) { raiz.classList.remove('portada'); return mostrar(0); }
+    clearTimeout(temporizador); callar();
+    raiz.classList.add('portada');
+    idx = 0;
+    escenario.innerHTML = `<svg viewBox="0 0 800 450" xmlns="http://www.w3.org/2000/svg">${DEFS}${ESCENAS[0].svg}</svg>`;
+    rotulo.innerHTML = `<h2>Tutorial con voz · 1 minuto</h2><p>Te explico cómo se juega antes de entrar. 🎧 Sube el volumen.</p>
+      <div class="final-acciones"><button class="grande" data-a="comenzar">▶ Empezar</button><button data-a="saltar">Saltar</button></div>`;
+    rotulo.classList.remove('nuevo'); void rotulo.offsetWidth; rotulo.classList.add('nuevo');
   }
   window.abrirTutorial = abrir;
 
@@ -404,12 +457,12 @@
       const b = document.createElement('button');
       b.textContent = '🎬 Ver tutorial';
       b.style.cssText = 'background:transparent;border:1px solid #f0e68c;color:#f0e68c;border-radius:4px;padding:8px 18px;font-size:.95rem;cursor:pointer;opacity:.85';
-      b.addEventListener('click', (e) => { e.stopPropagation(); abrir(); });
+      b.addEventListener('click', (e) => { e.stopPropagation(); abrir(true); });
       ov.appendChild(b);
     }
     const forzar = params.get('intro');
     if (forzar === '0' || MR_simulando()) return;
-    if (forzar === '1' || !leer()) abrir();
+    if (forzar === '1' || !leer()) abrir(false);
   });
   // En la simulación de escritorio (?modo=aula) no se interrumpe
   function MR_simulando() { return params.get('modo') === 'aula'; }

@@ -190,18 +190,25 @@
   ];
 
   /* Duración de cada locución (ms). Si se regeneran los mp3, actualizar. */
-  const VOZ = [5710, 7680, 6670, 7420, 5690, 8090, 5710, 6700, 4150];
-  const audios = ESCENAS.map((_, i) => { const a = new Audio('audio/tutorial/escena' + i + '.mp3'); a.preload = 'auto'; return a; });
+  const VOZ = [5690, 7650, 6660, 7390, 5670, 8070, 5690, 6660, 4130];
+  // Un único reproductor: una vez desbloqueado con un toque, sirve para
+  // todas las escenas (iPhone/iPad exigen esto; en el Quest también va bien).
+  const VERSION_AUDIO = 4;
+  const urlVoz = (i) => 'audio/tutorial/escena' + i + '.mp3?v=' + VERSION_AUDIO;
+  const voz = new Audio(); voz.preload = 'auto';
+  window.__vozTutorial = voz;
+  ESCENAS.forEach((_, i) => { const l = document.createElement('link'); l.rel = 'prefetch'; l.href = urlVoz(i); document.head.appendChild(l); });
+  const audios = ESCENAS.map(() => voz);   // compatibilidad con el resto del código
   let conVoz = true;
   ESCENAS.forEach((e) => { e.anim = e.dur; });
   // Con voz, la escena dura lo que la locución (+ un respiro) y la animación se ralentiza a la par
   const duracion = (i) => { const e = ESCENAS[i]; if (!e.anim) return 0; return conVoz ? Math.max(e.anim, VOZ[i] + 900) : e.anim; };
-  function callar() { audios.forEach((a) => { a.pause(); }); }
+  function callar() { voz.pause(); }
   function hablar(i) {
-    callar();
+    voz.pause();
     if (!conVoz) return;
-    const a = audios[i]; try { a.currentTime = 0; } catch (e) {}
-    a.play().catch(() => {});
+    voz.src = urlVoz(i);
+    voz.play().catch((e) => console.warn('[tutorial] el audio no pudo sonar:', e && e.message));
   }
 
   /* ───────── estilos ───────── */
@@ -384,7 +391,7 @@
     if (pausado) { clearTimeout(temporizador); restante -= performance.now() - inicio; callar(); }
     else {
       if (duracion(idx)) programar(Math.max(300, restante));
-      if (conVoz && !audios[idx].ended) audios[idx].play().catch(() => {});
+      if (conVoz && !voz.ended && voz.src) voz.play().catch(() => {});
     }
   }
 

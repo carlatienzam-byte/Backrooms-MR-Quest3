@@ -7,8 +7,9 @@
    · "Saltar" la cierra. Una vez vista, solo vuelve a salir con el botón
      "🎬 Ver tutorial" de la pantalla de inicio.
    · ?intro=1 → mostrarla siempre ·  ?intro=0 → no mostrarla nunca
-   · Voz masculina (audio/tutorial/escenaN.mp3, generada con Piper TTS,
-     voz "carlfm" en castellano). Botón 🔊/🔇 para quitarla. Como el
+   · Locución grabada por Carlos (audio/tutorial/escenaN.mp3). Para
+     cambiarla basta con sustituir los mp3: los tiempos se leen de los
+     propios archivos. Botón 🔊/🔇 para quitarla. Como el
      navegador no deja sonar audio sin un toque previo, la primera vez
      sale una portada con "Empezar con voz".
    ════════════════════════════════════════════════════════════════════ */
@@ -190,10 +191,10 @@
   ];
 
   /* Duración de cada locución (ms): valores de reserva; se corrigen al cargar los mp3. */
-  const VOZ = [5690, 7650, 6660, 7390, 5670, 8070, 5690, 6660, 4130];
+  const VOZ = [6635, 8620, 8463, 9012, 6870, 10814, 6974, 6844, 5642];
   // Un único reproductor: una vez desbloqueado con un toque, sirve para
   // todas las escenas (iPhone/iPad exigen esto; en el Quest también va bien).
-  const VERSION_AUDIO = 4;
+  const VERSION_AUDIO = 5;
   const urlVoz = (i) => 'audio/tutorial/escena' + i + '.mp3?v=' + VERSION_AUDIO;
   const voz = new Audio(); voz.preload = 'auto';
   window.__vozTutorial = voz;
